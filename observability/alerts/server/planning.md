@@ -386,8 +386,8 @@ Runbook: `runbooks/59a-visibility-store-write-errors.md`
 | 66 | Replication Stream Panic | 🔴 Critical | Stream Health | Any replication stream panics |
 | 67 | Replication Latency High | ⚠️ Warning | Replication Latencies | p99 end-to-end replication latency exceeds 2s |
 | 68 | Replication Latency Critical | 🔴 Critical | Replication Latencies | p99 end-to-end replication latency exceeds 4s |
-| 69 | Replication DLQ Non-Empty | 🔴 Critical | DLQ Writes and Failures | `replication_dlq_non_empty` is non-zero — tasks have failed past all retries (Cassandra only) |
-| 70 | Replication DLQ Enqueue Failures | 🔴 Critical | DLQ Writes and Failures | DLQ enqueue failures detected — failed tasks cannot even be preserved for inspection (Cassandra only) |
+| 69 | Replication DLQ Non-Empty | 🔴 Critical | Replication DLQ Non-Empty and Enqueue Failures | `sum(increase(replication_dlq_non_empty[11m])) > 0` — a replication task is parked in the replication DLQ. All persistence backends. A raw non-zero test does not work: the metric is a counter |
+| 70 | Replication DLQ Enqueue Failures | 🔴 Critical | Replication DLQ Non-Empty and Enqueue Failures | `sum(rate(replication_dlq_enqueue_failed[5m])) > 0` — the task could not even be written to the DLQ. All persistence backends. Was specified on `replication_dlq_failed`, which does not exist |
 | 71 | Replication Tasks Failing | ⚠️ Warning | Replication Task Throughput | Sustained replication task failure rate |
 
 ---

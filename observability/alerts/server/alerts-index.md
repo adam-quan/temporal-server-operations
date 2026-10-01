@@ -1597,7 +1597,7 @@ p99 write latency to a visibility store has exceeded 3s. May indicate recovery f
 
 ## Section 18 — Cluster Replication
 
-> **Dashboard panels:** Stream Health, Replication Latencies, DLQ Writes and Failures, Replication Task Throughput
+> **Dashboard panels:** Stream Health, Replication Latencies, Replication DLQ Non-Empty and Enqueue Failures, Replication Task Throughput
 > **Metrics:** `replication_stream_stuck`, `replication_latency`, `replication_dlq_non_empty`, `replication_dlq_enqueue_failures`
 > **Component:** history
 > **Note:** Replication alerts are only meaningful on multi-cluster active-standby deployments.
@@ -1668,9 +1668,11 @@ p99 write latency to a visibility store has exceeded 3s. May indicate recovery f
 |---|---|
 | Status | 📋 Planned |
 | Severity | critical |
-| Panel | DLQ Writes and Failures |
+| Panel | Replication DLQ Non-Empty and Enqueue Failures (2005) |
 
-**Condition:** `replication_dlq_non_empty` is non-zero — tasks have failed past all retries and are preserved in the DLQ for inspection. Cassandra only.
+**Condition:** `sum(increase(replication_dlq_non_empty[11m])) > 0` — a replication task has failed all its apply attempts (`history.ReplicationTaskProcessorErrorRetryMaxAttempts`, default 80) and is parked in the replication DLQ. **Not** Cassandra only; applies to every persistence backend.
+
+> **Respecify before building.** The condition recorded here until 2026-10-01 was "`replication_dlq_non_empty` is non-zero", which cannot work: the metric is a counter incremented once per periodic check that finds a non-empty DLQ, so a raw non-zero test fires forever after the first ever occurrence and never clears. It has to be an `increase` or `rate` over a window of at least 11 minutes, because the check runs on a 5-minute interval with full jitter. Decide the `for` duration against that cadence too — anything under ~15m risks firing on a single observation.
 
 ---
 
@@ -1680,9 +1682,11 @@ p99 write latency to a visibility store has exceeded 3s. May indicate recovery f
 |---|---|
 | Status | 📋 Planned |
 | Severity | critical |
-| Panel | DLQ Writes and Failures |
+| Panel | Replication DLQ Non-Empty and Enqueue Failures (2005) |
 
-**Condition:** DLQ enqueue failures detected — failed tasks cannot even be preserved for inspection. Cassandra only.
+**Condition:** `sum(rate(replication_dlq_enqueue_failed[5m])) > 0` — a replication task failed all its apply attempts **and** could not be written to the replication DLQ, so it is not preserved for inspection at all. More severe than alert 69. **Not** Cassandra only.
+
+> **Respecify before building.** This alert was recorded against `replication_dlq_failed`, which has never existed in server source — it could never have fired. The real metric is `replication_dlq_enqueue_failed`. Note the DLQ write is retried indefinitely, so the rate climbs steeply while the condition lasts; a short `for` is appropriate here, unlike alert 69.
 
 ---
 

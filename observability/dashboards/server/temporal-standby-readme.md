@@ -4,7 +4,7 @@ A dedicated Grafana dashboard for monitoring Temporal standby clusters in a mult
 
 > **Compatibility:** Temporal Server v1.20+ · Grafana 9.0+ · Prometheus
 
-> **Current version:** v2.2.0 — see [CHANGELOG](./temporal-standby-changelog.md)
+> **Current version:** v2.3.0 — see [CHANGELOG](./temporal-standby-changelog.md)
 
 ---
 
@@ -19,7 +19,7 @@ A dedicated Grafana dashboard for monitoring Temporal standby clusters in a mult
     - [Stream Health](#1-stream-health)
     - [Replication Lag](#2-replication-lag)
     - [Task Pipeline Health](#3-task-pipeline-health)
-    - [Replication DLQ](#4-replication-dlq--cassandra-only)
+    - [Replication DLQ](#4-replication-dlq)
     - [Namespace Replication](#5-namespace-replication)
     - [Standby Task Processing Behavior](#6-standby-task-processing-behavior)
     - [Standby Cluster Infrastructure](#7-standby-cluster-infrastructure)
@@ -157,19 +157,21 @@ Tracks the full replication task lifecycle on the standby receiver. The most imp
 
 ---
 
-### 4. Replication DLQ ⚠️ Cassandra Only
+### 4. Replication DLQ
 
-> **Cassandra persistence only.** The history task DLQ is only implemented for Cassandra backends. On PostgreSQL or MySQL these panels will not emit data and should be ignored. The `history.TaskDLQEnabled` dynamic config must also be `true` (which is the default). Use `tdbg dlq` CLI to inspect and manage DLQ contents.
+> **This is the replication task DLQ, not the history task DLQ.** A replication task lands here after failing to apply `history.ReplicationTaskProcessorErrorRetryMaxAttempts` times (default 80). The history task DLQ is a separate mechanism for history tasks that fail processing, governed by `history.TaskDLQEnabled` — that setting has no effect on these panels.
+>
+> **Neither DLQ is Cassandra-only.** `replication_tasks_dlq` exists in the PostgreSQL, MySQL and SQLite schemas with insert, read and delete paths in each plugin, and every metric in this section is emitted from generic replication and shard code with no store gate. Versions of this dashboard before v2.3.0 labelled all five panels "⚠️ Cassandra Only" and described them as the history task DLQ. Both were wrong. Use `tdbg dlq` to inspect and manage contents.
 
 The DLQ is the last line of defense before replication tasks are permanently lost. Tasks land here after exhausting all retry attempts (default: 80 attempts, controlled by `history.ReplicationTaskProcessorErrorRetryMaxAttempts`).
 
 | Panel | Description |
 |---|---|
-| **DLQ Non-Empty ⚠️ Cassandra Only** | Stat panel. Non-zero means tasks have failed past all retry attempts and landed in DLQ. Should be a paging alert. |
-| **DLQ Enqueue Failures ⚠️ Cassandra Only** | Stat panel. Tasks that failed AND could not be written to DLQ. More severe than DLQ non-empty — it means failed tasks cannot even be preserved for later inspection. |
-| **DLQ Max Level ⚠️ Cassandra Only** | Gauge. Highest task ID written to DLQ. Used together with ack level to calculate unprocessed DLQ depth. |
-| **DLQ Ack Level ⚠️ Cassandra Only** | Gauge. Last task ID acknowledged from DLQ. The gap between max level and ack level is the number of unprocessed DLQ tasks. |
-| **DLQ Depth Over Time ⚠️ Cassandra Only** | Timeseries showing max level, ack level, and the derived gap (max − ack) together. A growing gap means DLQ tasks are accumulating faster than they are being processed. A flat or shrinking gap means DLQ processing is keeping up. |
+| **Replication DLQ Non-Empty Observations (11m)** | Stat panel. `replication_dlq_non_empty` is a **counter**, incremented once per periodic check that finds a non-empty replication DLQ — not a gauge. The check runs roughly every 5 minutes per shard per source cluster with **full jitter**, so gaps reach 5 minutes and any shorter window reads zero at random; the fixed `[11m]` window guarantees at least two checks. Shown as an `increase` over that window rather than a running total, so it drops back to zero once the DLQ drains. Above zero means something is parked right now. Before v2.3.0 this panel did `sum()` on the raw counter, which only ever climbed — once a DLQ had been non-empty even briefly it showed alarm permanently until the pod restarted. |
+| **Replication DLQ Enqueue Failures** | Stat panel. A replication task failed all its apply retries **and** could not be written to the DLQ, so nothing is preserved for inspection — more severe than landing in the DLQ. The write retries indefinitely, so this climbs fast while the condition lasts. Reads `replication_dlq_enqueue_failed`; before v2.3.0 it read `replication_dlq_failed`, which does not exist in server source, so the panel had never returned a point. |
+| **Replication DLQ Max Level** | Gauge. Highest replication task ID ever written to the DLQ, across shards. Updated only at the moment of a DLQ write, so it goes stale rather than falling — a flat line means no new dead-lettering, not an empty DLQ. A task-ID position, not a count. |
+| **Replication DLQ Ack Level** | Gauge. Highest replication task ID acknowledged out of the DLQ, across shards. While ack trails max, work is still parked. The distance between them is **not** a count of unprocessed tasks — task IDs come in per-shard ranges and are not contiguous. |
+| **Replication DLQ Task-ID Distance (Max Minus Ack)** | Timeseries showing max level, ack level and the distance between them. A growing distance means dead-lettering is outpacing acknowledgement; flat or shrinking means acknowledgement is keeping up. Two cautions. It is a **task-ID distance, not a message count** — task IDs are not contiguous, so the number tells you the DLQ is behind, not how far. And both series are a `max` across all shards and source clusters while their `instance` tag is derived differently on each metric (the ack gauge tags the shard owning the DLQ, the max gauge a shard id derived from the source), so the two maxima may not come from the same shard. Directional signal only — confirm contents with `tdbg dlq`. |
 
 ---
 
@@ -177,7 +179,7 @@ The DLQ is the last line of defense before replication tasks are permanently los
 
 Namespace replication is a separate subsystem from history task replication. Namespace metadata (including namespace registration, config updates, and retention changes) is replicated independently. You can have healthy history replication but broken namespace replication, which causes subtle but impactful issues on failover — missing namespaces, stale configs, or incorrect active/passive assignments.
 
-> Unlike the history task DLQ, the namespace replication DLQ is not Cassandra-specific and applies to all persistence backends.
+> The namespace replication DLQ is a third, separate queue — distinct from both the replication task DLQ in section 4 and the history task DLQ. Like them, it applies to all persistence backends.
 
 | Panel | Description |
 |---|---|
@@ -241,7 +243,7 @@ The following dynamic configs on the standby cluster have a direct effect on wha
 | `history.standbyTaskMissingEventsDiscardDelay` | 15 minutes | How long before a standby task with missing events is discarded entirely. The window between resend and discard delay is the recovery window. |
 | `history.ReplicationTaskProcessorErrorRetryMaxAttempts` | 80 attempts | Max retries before a task is sent to DLQ (Cassandra only). Drives DLQ panels in Section 4. |
 | `history.ReplicationTaskProcessorErrorRetryExpiration` | 5 minutes | Max retry duration before DLQ. |
-| `history.TaskDLQEnabled` | `true` | Must be true for DLQ panels in Section 4 to emit data. Cassandra only. |
+| `history.ReplicationTaskProcessorErrorRetryMaxAttempts` | `80` | Apply attempts before a replication task is parked in the replication DLQ — this is what drives the Section 4 panels. All persistence backends. |
 | `history.ReplicationEnableRateLimit` | `true` | Active-side rate limiting. Elevated `replication_sender_rate_limit_latency` in Section 2 is caused by this config on the active cluster. |
 | `history.ReplicationStreamSyncStatusDuration` | 1 second | How frequently the stream syncs status. Affects stream health panel responsiveness in Section 1. |
 

@@ -1,10 +1,65 @@
 # Changelog — Temporal Server Dashboard
 
+## v2.21.0 — 2026-10-01
+
+One panel in the Cluster Replication row that was wrong in four separate ways at once, three of
+them silent. It claimed to be the history task DLQ, it was labelled Cassandra-only, one of its two
+series read a metric that does not exist, and the other aggregated a counter as if it were a gauge.
+
+### Fixed
+
+- **Replication DLQ Non-Empty and Enqueue Failures (2005)** — was *DLQ Writes and Failures
+  ⚠️ Cassandra Only*. Four corrections:
+
+  **The metric name was wrong.** The panel read `replication_dlq_failed`, which has never existed
+  in server source on any branch. The real metric is `replication_dlq_enqueue_failed`, present
+  since the original Domain Replication DLQ commit — first tagged **v0.10.0**, so there is no
+  version floor worth stating. One missing word meant that series had never returned a point.
+
+  **The Cassandra-only label was false.** The replication task DLQ is implemented for SQL as well:
+  `replication_tasks_dlq` exists in the PostgreSQL, MySQL and SQLite schemas with insert, read and
+  delete paths in each plugin, and all of its metrics are emitted from generic replication and
+  shard code with no store gate.
+
+  **It named the wrong DLQ.** The description cited `history.TaskDLQEnabled`, which governs the
+  *history task* DLQ — an unrelated mechanism. What actually sends a replication task here is
+  `history.ReplicationTaskProcessorErrorRetryMaxAttempts` (default 80).
+
+  **A counter was being read as a gauge.** `replication_dlq_non_empty` is a counter incremented by
+  a periodic check each time it finds a non-empty replication DLQ. The panel did
+  `max(replication_dlq_non_empty)`, which returns the cumulative count since process start — so
+  once a DLQ had been non-empty even briefly, the panel showed alarm permanently until the pod
+  restarted, and nothing it displayed afterwards meant anything. It is now
+  `sum(increase(...[11m]))`, which falls back to zero when the DLQ drains.
+
+  The `[11m]` window is deliberate and matches the reasoning behind panels 325, 2109 and 2110:
+  the check runs on a 5-minute interval with **full jitter**, so gaps between observations on a
+  given shard reach 5 minutes and any shorter window reads zero at random.
+
+### Changed
+
+- **Readme — the DLQ note above the Cluster Replication table** was the source of the confusion
+  and now separates the two DLQs explicitly, says which setting governs each, and records that
+  neither is Cassandra-only.
+
+### Known, not fixed here
+
+- **`replicator_dlq_enqueue_fails`** (`service/worker/replicator`) is emitted and on no dashboard.
+  It is the namespace-replication counterpart to **Namespace Replication DLQ Enqueue Requests** on
+  the standby dashboard, which shows enqueue requests with no failure series beside it.
+- **Planned alerts 69 and 70** are specified against this panel. Alert 70 was written on the
+  non-existent metric name and alert 69 on the un-rated counter; both need respecifying before
+  they are built.
+- The same four defects exist on the standby dashboard's Replication DLQ row and are fixed in its
+  own release.
+
+---
+
 ## v2.20.0 — 2026-09-30
 
 One panel that could not return data, and the essential-set alert built on it that therefore
-could never fire. Found while working a cluster whose timer queue had been stuck for 82 days
-with nothing alerting on it.
+could never fire. Between them, a timer queue could stay stuck indefinitely with nothing to
+surface it.
 
 `shardinfo_scheduled_queue_lag` is emitted once per shard every ~5 minutes
 (`queueMetricUpdateInterval`, with 15% jitter, so up to ~5.75 min between points). A rate window
@@ -79,8 +134,8 @@ and alerts 80 and 83 go blind rather than quiet.
   Backs alert 83.
 - **Dead-Lettered Tasks — Execution-Stranding (page-worthy) (2202)** — now reads
   `task_terminal_failures`. Backs alert 80, the page for stranded executions. This is the one that
-  mattered most: a cluster was found with thousands of executions frozen for up to two years and
-  nothing had ever alerted.
+  mattered most: with the panel empty, executions can stay frozen indefinitely and the page that
+  exists to catch it never fires.
 - **Dead-Lettered Tasks — Informational (2203)** — now reads `task_terminal_failures`.
 - **Signal 2 — History Task DLQ Writes & Write Failures (2213)** — the `dlq_writes` series now
   reads `task_terminal_failures`. The `task_dlq_failures` series is unchanged and was never
@@ -92,9 +147,9 @@ and alerts 80 and 83 go blind rather than quiet.
 
 - **Dead-Letter Queue Depth by Category (2206).** `dlq_message_count` by `task_category` — the
   number of messages **sitting** in each dead-letter queue. Every other panel in this group is a
-  rate, and a rate reads zero once dead-lettering stops: one cluster had 1.4 million messages
-  parked in a queue that had been quiet for twelve months, and every panel here was flat zero the
-  whole time. A rate cannot show a backlog that already exists. Note the gauge refreshes every
+  rate, and a rate reads zero once dead-lettering stops — so a queue that filled long ago and has
+  been quiet since reads flat zero on every one of them, however many messages are parked in it.
+  A rate cannot show a backlog that already exists. Note the gauge refreshes every
   three hours and only from the host owning shard 1.
 - **Task Retry Depth — Stranding Types (approaching DLQ) (2207).** The `task_attempt` companion to
   the visibility panel of the same name, for the execution-stranding operation types. Its real use

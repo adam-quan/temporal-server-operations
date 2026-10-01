@@ -1323,7 +1323,7 @@
         "y": 3
       },
       "id": 40,
-      "title": "\ud83d\udc80 Replication DLQ (\u26a0\ufe0f Cassandra Only)",
+      "title": "Replication DLQ",
       "type": "row",
       "panels": [
         {
@@ -1346,7 +1346,7 @@
           "type": "text",
           "options": {
             "mode": "markdown",
-            "content": "**Replication DLQ** \u26a0\ufe0f **Cassandra persistence only** \u2014 these panels are only meaningful if your Temporal cluster uses Cassandra as the persistence backend. On PostgreSQL/MySQL the history task DLQ is not implemented and these metrics will not be emitted.\n\nThe gap between `dlq_max_level` and `dlq_ack_level` represents unprocessed DLQ depth. `replication_dlq_non_empty` is the simplest alert: any non-zero value means tasks have failed past all retry attempts. `replication_dlq_failed` means tasks couldn't even be written to the DLQ \u2014 a more severe signal. Use `tdbg dlq` CLI to inspect DLQ contents."
+            "content": "**Replication DLQ** \u2014 where a replication task is parked after it fails to apply `history.ReplicationTaskProcessorErrorRetryMaxAttempts` times (default 80).\n\n**This is not the history task DLQ.** That is a separate mechanism, governed by `history.TaskDLQEnabled`, covering history tasks that fail processing. Neither one is Cassandra-only: `replication_tasks_dlq` exists in the PostgreSQL, MySQL and SQLite schemas with insert, read and delete paths in each plugin, and every metric here is emitted from generic replication and shard code with no store gate. Versions of this dashboard before v2.3.0 claimed otherwise on all five panels.\n\n**Reading these panels.** `replication_dlq_non_empty` is a counter incremented once per periodic check that finds a non-empty DLQ, not a gauge \u2014 the check runs roughly every 5 minutes per shard per source cluster with full jitter, which is why it is shown as an increase over a fixed 11-minute window. `replication_dlq_enqueue_failed` is the severe one: the task could not even be written to the DLQ, so nothing is preserved for inspection, and the write retries indefinitely. The two level gauges are task-ID positions, not message counts \u2014 task IDs come in per-shard ranges and are not contiguous, so the distance between max and ack tells you the DLQ is behind, not how much is in it. Count the real contents with `tdbg dlq`."
           }
         },
         {
@@ -1383,8 +1383,8 @@
             "y": 6
           },
           "id": 1031,
-          "title": "DLQ Non-Empty \u26a0\ufe0f Cassandra Only",
-          "description": "Non-zero means tasks have failed past all retry attempts and landed in DLQ.",
+          "title": "Replication DLQ Non-Empty Observations (11m)",
+          "description": "Replication tasks that failed to apply history.ReplicationTaskProcessorErrorRetryMaxAttempts times (default 80) and were parked in the replication DLQ. replication_dlq_non_empty is a COUNTER, incremented once per periodic check that finds a non-empty DLQ - not a gauge. The check runs about every 5 minutes per shard per source cluster with full jitter, so gaps reach 5 minutes and any shorter window reads zero at random; the fixed 11m window guarantees at least two checks. Shown as an increase over that window rather than a running total, so it returns to zero once the DLQ drains. Above zero means something is parked in the replication DLQ right now. This is the REPLICATION DLQ, not the history task DLQ - history.TaskDLQEnabled does not govern it - and it is not Cassandra-only.",
           "type": "stat",
           "options": {
             "reduceOptions": {
@@ -1398,8 +1398,8 @@
           },
           "targets": [
             {
-              "expr": "sum(replication_dlq_non_empty{})",
-              "legendFormat": "{{instance}}",
+              "expr": "sum(increase(replication_dlq_non_empty{}[11m]))",
+              "legendFormat": "Non-empty observations",
               "refId": "A"
             }
           ]
@@ -1438,8 +1438,8 @@
             "y": 6
           },
           "id": 1032,
-          "title": "DLQ Enqueue Failures \u26a0\ufe0f Cassandra Only",
-          "description": "Tasks that failed AND could not be written to DLQ. More severe than dlq_non_empty.",
+          "title": "Replication DLQ Enqueue Failures",
+          "description": "A replication task failed all its apply retries AND could not be written to the replication DLQ, so it is not even preserved for inspection - more severe than a task merely landing in the DLQ. The DLQ write is retried indefinitely, so this climbs fast for as long as the condition lasts. Reads replication_dlq_enqueue_failed; earlier versions of this dashboard read replication_dlq_failed, which does not exist in server source, so this panel never returned a point before v2.3.0.",
           "type": "stat",
           "options": {
             "reduceOptions": {
@@ -1453,8 +1453,8 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(replication_dlq_failed{}[$__rate_interval]))",
-              "legendFormat": "{{instance}}",
+              "expr": "sum(rate(replication_dlq_enqueue_failed{}[$__rate_interval]))",
+              "legendFormat": "Enqueue failures/s",
               "refId": "A"
             }
           ]
@@ -1494,8 +1494,8 @@
             "y": 6
           },
           "id": 1033,
-          "title": "DLQ Max Level \u26a0\ufe0f Cassandra Only",
-          "description": "Highest task ID written to DLQ.",
+          "title": "Replication DLQ Max Level",
+          "description": "Highest replication task ID ever written to the replication DLQ, across shards. Only updated at the moment a task is written, so it goes stale rather than falling - a flat line means no new dead-lettering, not an empty DLQ. Task IDs are allocated in per-shard ranges and are not contiguous, so this is a position, not a count of messages.",
           "type": "gauge",
           "options": {
             "reduceOptions": {
@@ -1509,7 +1509,7 @@
           "targets": [
             {
               "expr": "max(replication_dlq_max_level{})",
-              "legendFormat": "DLQ Max Level \u26a0\ufe0f Cassandra Only",
+              "legendFormat": "Max level",
               "refId": "A"
             }
           ]
@@ -1549,8 +1549,8 @@
             "y": 6
           },
           "id": 1034,
-          "title": "DLQ Ack Level \u26a0\ufe0f Cassandra Only",
-          "description": "Last task ID acknowledged/processed from DLQ. Gap between max and ack level = unprocessed DLQ depth.",
+          "title": "Replication DLQ Ack Level",
+          "description": "Highest replication task ID acknowledged out of the replication DLQ, across shards. Compare with Max Level: while ack trails max, work is still parked. Task IDs are not contiguous, so the distance between the two is a position gap, not a message count - use tdbg dlq to count what is actually there.",
           "type": "gauge",
           "options": {
             "reduceOptions": {
@@ -1564,7 +1564,7 @@
           "targets": [
             {
               "expr": "max(replication_dlq_ack_level{})",
-              "legendFormat": "DLQ Ack Level \u26a0\ufe0f Cassandra Only",
+              "legendFormat": "Ack level",
               "refId": "A"
             }
           ]
@@ -1606,8 +1606,8 @@
             "y": 10
           },
           "id": 1035,
-          "title": "DLQ Depth Over Time (Max - Ack Level) \u26a0\ufe0f Cassandra Only",
-          "description": "The gap between DLQ max level and ack level over time. Growing gap means DLQ is accumulating faster than it is being processed.",
+          "title": "Replication DLQ Task-ID Distance (Max Minus Ack)",
+          "description": "Distance between the highest replication task ID written to the DLQ and the highest acknowledged, over time. A growing distance means dead-lettering is outpacing acknowledgement. Two cautions. Task IDs are allocated in per-shard ranges and are not contiguous, so this is a task-ID distance and NOT a count of messages - a large number does not tell you how many are parked, only how far apart the two positions are. And both series are a max across all shards and source clusters, while their instance tag is derived differently on each metric (the ack gauge tags the shard that owns the DLQ, the max gauge tags a shard id derived from the source), so the two maxima may not come from the same shard - treat this as a directional signal and confirm real contents with tdbg dlq.",
           "type": "timeseries",
           "options": {
             "legend": {
@@ -1624,7 +1624,7 @@
           "targets": [
             {
               "expr": "max(replication_dlq_max_level{}) - max(replication_dlq_ack_level{})",
-              "legendFormat": "DLQ unprocessed depth",
+              "legendFormat": "Task-ID distance",
               "refId": "A"
             },
             {
@@ -1673,7 +1673,7 @@
           "type": "text",
           "options": {
             "mode": "markdown",
-            "content": "**Namespace Replication** \u2014 separate from history task replication. Namespace replication failures are a distinct failure mode: you can have healthy history replication but broken namespace replication, which causes subtle issues on failover (missing namespaces, stale configs). This DLQ is **not** Cassandra-specific."
+            "content": "**Namespace Replication** \u2014 separate from history task replication. Namespace replication failures are a distinct failure mode: you can have healthy history replication but broken namespace replication, which causes subtle issues on failover (missing namespaces, stale configs). Like the replication task DLQ, this one is implemented for every persistence backend."
           }
         },
         {
@@ -2792,7 +2792,7 @@
   },
   "timepicker": {},
   "timezone": "utc",
-  "title": "Temporal Standby Cluster \u2014 Replication Health v2.2.0",
+  "title": "Temporal Standby Cluster \u2014 Replication Health v2.3.0",
   "uid": "temporal-standby-replication-v1",
   "version": 1,
   "weekStart": ""

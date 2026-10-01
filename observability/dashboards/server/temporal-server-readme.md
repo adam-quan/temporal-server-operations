@@ -4,7 +4,7 @@ A comprehensive Grafana dashboard for monitoring a self-hosted [Temporal](https:
 
 > **Compatibility:** Temporal Server v1.20+ · Grafana 9.0+ · Prometheus
 
-> **Current version:** v2.20.0 — see [CHANGELOG](./temporal-server-changelog.md)
+> **Current version:** v2.21.0 — see [CHANGELOG](./temporal-server-changelog.md)
 
 ---
 
@@ -399,7 +399,7 @@ Tracks metrics related to multi-cluster replication from the **active cluster's 
 
 > **Standby-side monitoring:** This section shows what the active cluster is sending. To monitor replication fidelity and readiness from the standby side — including lag, DLQ depth, standby task retries, and failover readiness — use the dedicated [Temporal Standby Cluster — Replication Health](#related-resources) dashboard.
 
-> **DLQ panels:** Panels marked **⚠️ Cassandra Only** rely on the history task DLQ which is only implemented for Cassandra persistence backends. On PostgreSQL or MySQL these panels will not emit data. The `history.TaskDLQEnabled` dynamic config must also be `true` (default).
+> **Two different DLQs, do not confuse them.** The **history task DLQ** parks a history task that has failed processing (governed by `history.TaskDLQEnabled` and `history.TaskDLQUnexpectedErrorAttempts`); it is covered by the [History Task DLQ / Terminal Failures](#20-history-task-dlq--terminal-failures) row. The **replication task DLQ** parks a replication task that failed to apply (governed by `history.ReplicationTaskProcessorErrorRetryMaxAttempts`, default 80) and is covered by **Replication DLQ Non-Empty and Enqueue Failures** in this row. Neither is Cassandra-only — both are implemented for PostgreSQL, MySQL and SQLite as well. Earlier versions of this dashboard labelled the replication panel "⚠️ Cassandra Only" and described it as the history task DLQ; both were wrong and were corrected in v2.21.0.
 
 | Panel | Description |
 |---|---|
@@ -414,7 +414,7 @@ Tracks metrics related to multi-cluster replication from the **active cluster's 
 | **Sender Rate Limit Latency** | Time the active cluster spent rate-limiting sends to standby clusters, controlled by the `history.ReplicationEnableRateLimit` dynamic config. Elevated values here are the active-side cause of standby lag that may have no other visible signal on the standby itself. |
 | **Replication Task Generation and Load Latency** | Generation latency measures the time from a workflow event to replication task creation. Load latency measures the persistence schedule-to-start for replication tasks. High values here indicate the active cluster is slow to produce replication tasks, which contributes to end-to-end replication lag. |
 | **Outlier Namespaces** | Namespaces that are disproportionately contributing to replication problems. Useful for isolating a single namespace as the root cause of broader replication degradation. |
-| **DLQ Writes and Failures ⚠️ Cassandra Only** | Rate of tasks being written to the history task DLQ and failures to write to the DLQ. A non-zero DLQ enqueue failure rate is more severe than tasks landing in DLQ — it means tasks have failed all retries AND cannot be preserved for later inspection. Use `tdbg dlq` to inspect DLQ contents. |
+| **Replication DLQ Non-Empty and Enqueue Failures** | The **replication** task DLQ — where a replication task lands after failing to apply `history.ReplicationTaskProcessorErrorRetryMaxAttempts` times (default 80). Not the history task DLQ, and not Cassandra-only. Two series on two different windows, because the metrics behave differently. `Enqueue failures/s` (`replication_dlq_enqueue_failed`) is a rate: the task failed all retries **and** could not be written to the DLQ, so it is not preserved for inspection — more severe than landing in the DLQ, and because the write retries indefinitely this climbs fast while it lasts. `Non-empty observations (11m)` (`replication_dlq_non_empty`) is an **increase**, not a gauge: the metric is a counter incremented by a periodic check that finds a non-empty DLQ, running roughly every 5 minutes per shard per source cluster with full jitter. A short window reads zero at random, so it uses a fixed `[11m]`; and because it is an increase rather than a running total it returns to zero once the DLQ drains. Above zero means something is in the DLQ now. Inspect and replay with `tdbg dlq`. |
 
 ---
 

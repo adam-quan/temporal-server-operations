@@ -7003,7 +7003,7 @@
           "type": "text",
           "options": {
             "mode": "markdown",
-            "content": "**Cluster Replication** tracks metrics related to multi-cluster replication from the **active cluster's perspective** \u2014 task generation, send throughput, and stream health.\n\n> **Standby-side monitoring:** Use the dedicated **Temporal Standby Dashboard** for receiver-side lag, DLQ depth, standby task retries, and failover readiness.\n\n> **DLQ panels** marked \u26a0\ufe0f Cassandra Only require Cassandra persistence and `history.TaskDLQEnabled = true` (default)."
+            "content": "**Cluster Replication** tracks metrics related to multi-cluster replication from the **active cluster's perspective** \u2014 task generation, send throughput, and stream health.\n\n> **Standby-side monitoring:** Use the dedicated **Temporal Standby Dashboard** for receiver-side lag, DLQ depth, standby task retries, and failover readiness.\n\n> **Replication DLQ:** the panel in this row covers the **replication task** DLQ, driven by `history.ReplicationTaskProcessorErrorRetryMaxAttempts` (default 80) \u2014 not the history task DLQ, and not Cassandra-only."
           }
         },
         {
@@ -7683,8 +7683,8 @@
             "y": 67
           },
           "id": 2005,
-          "title": "DLQ Writes and Failures \u26a0\ufe0f Cassandra Only",
-          "description": "Rate of tasks being written to DLQ and failures to write to DLQ. Only emitted for Cassandra persistence backends (history.TaskDLQEnabled must be true). DLQ enqueue failures are more severe than tasks landing in DLQ \u2014 failed tasks cannot even be preserved for inspection. Use tdbg dlq to inspect.",
+          "title": "Replication DLQ Non-Empty and Enqueue Failures",
+          "description": "The REPLICATION task DLQ - where a replication task is parked after it fails to apply history.ReplicationTaskProcessorErrorRetryMaxAttempts times (default 80). This is a different mechanism from the history task DLQ: history.TaskDLQEnabled does not govern it, and it is NOT Cassandra-only - the replication_tasks_dlq table and its insert/read/delete paths exist for PostgreSQL, MySQL and SQLite too. Two series, two windows, because the underlying metrics behave differently. Enqueue failures/s is a rate: a replication task failed all its retries AND could not even be written to the DLQ, so it is not preserved for inspection - more severe than a task merely landing in the DLQ, and the write is retried indefinitely so this climbs fast while it lasts. Non-empty observations (11m) counts periodic checks that found a non-empty replication DLQ: the check runs about every 5 minutes per shard per source cluster with full jitter, so gaps reach 5 minutes and a short window reads zero at random - 11m guarantees at least two checks. Any value above zero means something is sitting in the DLQ right now. It is an increase over the window, not a running total, so it falls back to zero once the DLQ drains. Inspect and replay with tdbg dlq.",
           "type": "timeseries",
           "options": {
             "legend": {
@@ -7700,13 +7700,13 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(replication_dlq_failed{}[$__rate_interval]))",
-              "legendFormat": "DLQ enqueue failures/s",
+              "expr": "sum(rate(replication_dlq_enqueue_failed{}[$__rate_interval]))",
+              "legendFormat": "Enqueue failures/s",
               "refId": "A"
             },
             {
-              "expr": "max(replication_dlq_non_empty{})",
-              "legendFormat": "DLQ non-empty",
+              "expr": "sum(increase(replication_dlq_non_empty{}[11m]))",
+              "legendFormat": "Non-empty observations (11m)",
               "refId": "B"
             }
           ]
@@ -8839,7 +8839,7 @@
   },
   "timepicker": {},
   "timezone": "utc",
-  "title": "Temporal Server Dashboard v2.20.0",
+  "title": "Temporal Server Dashboard v2.21.0",
   "uid": "temporal-overview-v1",
   "version": 11,
   "weekStart": ""

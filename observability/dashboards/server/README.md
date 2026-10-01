@@ -6,7 +6,7 @@ Grafana dashboards for monitoring a self-hosted Temporal Server cluster.
 
 ## Dashboards
 
-### Temporal Server Dashboard — v2.20.0
+### Temporal Server Dashboard — v2.21.0
 
 Comprehensive cluster monitoring: throughput, persistence (including which limit is rejecting database calls), service latencies, throttling, shard movement, workflow stats, matching, visibility (including dual visibility and the Elasticsearch write path), replication, and authorization.
 
@@ -18,7 +18,7 @@ Comprehensive cluster monitoring: throughput, persistence (including which limit
 
 ---
 
-### Temporal Standby Cluster — Replication Health — v2.2.0
+### Temporal Standby Cluster — Replication Health — v2.3.0
 
 Dedicated standby-side monitoring: replication lag, DLQ depth, standby task retries, stream health, and failover readiness.
 
