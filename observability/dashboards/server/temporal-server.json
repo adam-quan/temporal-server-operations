@@ -3769,8 +3769,8 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile($p, sum by (operation, le) (rate(shardinfo_scheduled_queue_lag_bucket{task_category=\"timer\",service_name=\"history\"}[$__rate_interval])))",
-              "legendFormat": "{{operation}}",
+              "expr": "histogram_quantile($p, sum by (task_category, le) (rate(shardinfo_scheduled_queue_lag_bucket{task_category=\"timer\",service_name=\"history\"}[11m])))",
+              "legendFormat": "{{task_category}}",
               "refId": "A"
             }
           ]
@@ -6395,7 +6395,7 @@
           },
           "id": 2128,
           "title": "Visibility Tasks Dead-Lettered by Task Type",
-          "description": "Visibility tasks written to the history task dead letter queue, split by task type. Above zero means those tasks gave up retrying. On ELASTICSEARCH that does not necessarily mean the records are missing: the bulk processor holds documents in memory, so a write that timed out may still be flushed and indexed once Elasticsearch recovers, after the task has already been dead-lettered. Verified on a test cluster - twelve dead-lettered tasks, all twelve records present in both stores afterwards. Check the store for the records before replaying. On SQL there is no such buffer, so a dead-lettered task there does mean the write never landed. The task type matters: a dropped Start or Upsert is rebuilt by the workflow's next visibility write, but a dropped CloseExecution is the last task that workflow ever emits and nothing rebuilds it, and a dropped DeleteExecution leaves a record that outlives its workflow. Recover with tdbg dlq read / merge --dlq-type visibility. The Dead-Lettered Tasks panels in the History Task DLQ row blend visibility with retention and workflow-task-timeout operations; this panel is visibility only. Cluster-wide - ignores $namespace. Applies to both SQL and Elasticsearch visibility stores.",
+          "description": "Visibility tasks written to the history task dead letter queue, split by task type.Reads task_terminal_failures, not dlq_writes: dlq_writes only carries the operation label from server v1.32.0, so an operation-filtered query on it returns nothing on older servers. task_terminal_failures carries operation on every version. It counts a task being marked terminally failed, which is the same moment. Turning history.TaskDLQEnabled off does not leave this panel accurate: the two failure paths then diverge and neither reaches it. A task failing with a corrupt or otherwise non-retryable error is dropped and marked complete - task_errors_corruption counts it, this panel does not. A task failing with unexpected but retryable errors, the 70-attempt path this panel is mostly about, is never dead-lettered at all and retries with no limit - neither metric counts it. So with the DLQ off, zero here does not mean nothing is being abandoned. Above zero means those tasks gave up retrying. On ELASTICSEARCH that does not necessarily mean the records are missing: the bulk processor holds documents in memory, so a write that timed out may still be flushed and indexed once Elasticsearch recovers, after the task has already been dead-lettered. Verified on a test cluster - twelve dead-lettered tasks, all twelve records present in both stores afterwards. Check the store for the records before replaying. On SQL there is no such buffer, so a dead-lettered task there does mean the write never landed. The task type matters: a dropped Start or Upsert is rebuilt by the workflow's next visibility write, but a dropped CloseExecution is the last task that workflow ever emits and nothing rebuilds it, and a dropped DeleteExecution leaves a record that outlives its workflow. Recover with tdbg dlq read / merge --dlq-type visibility. The Dead-Lettered Tasks panels in the History Task DLQ row blend visibility with retention and workflow-task-timeout operations; this panel is visibility only. Cluster-wide - ignores $namespace. Applies to both SQL and Elasticsearch visibility stores.",
           "type": "timeseries",
           "options": {
             "legend": {
@@ -6411,7 +6411,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(dlq_writes{operation=~\"VisibilityTask.*\"}[$__rate_interval])) by (operation)",
+              "expr": "sum(rate(task_terminal_failures{operation=~\"VisibilityTask.*\"}[$__rate_interval])) by (operation)",
               "legendFormat": "{{operation}}",
               "refId": "A"
             }
@@ -8009,7 +8009,7 @@
           },
           "id": 2202,
           "title": "Dead-Lettered Tasks \u2014 Execution-Stranding (page-worthy)",
-          "description": "History tasks sent to the DLQ that strand a running execution: activity retry/timeout timers and activity/workflow-task dispatch (Active + Standby). Any non-zero rate = permanently stranded work until DLQ redrive (tdbg dlq merge --dlq-type 2) or activity pause/unpause. This is the signal alert 80 pages on.",
+          "description": "History tasks sent to the DLQ that strand a running execution: activity retry/timeout timers and activity/workflow-task dispatch (Active + Standby). Any non-zero rate = permanently stranded work until DLQ redrive (tdbg dlq merge --dlq-type 2) or activity pause/unpause. This is the signal alert 80 pages on. Reads task_terminal_failures, not dlq_writes: dlq_writes only carries the operation label from server v1.32.0, so an operation-filtered query on it returns nothing on older servers. task_terminal_failures carries operation on every version. It counts a task being marked terminally failed, which is the same moment. Turning history.TaskDLQEnabled off does not leave this panel accurate: the two failure paths then diverge and neither reaches it. A task failing with a corrupt or otherwise non-retryable error is dropped and marked complete - task_errors_corruption counts it, this panel does not. A task failing with unexpected but retryable errors, the 70-attempt path this panel is mostly about, is never dead-lettered at all and retries with no limit - neither metric counts it. So with the DLQ off, zero here does not mean nothing is being abandoned.",
           "type": "timeseries",
           "options": {
             "legend": {
@@ -8025,7 +8025,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(dlq_writes{operation=~\"Timer(Active|Standby)TaskActivity(RetryTimer|Timeout)|Transfer(Active|Standby)Task(Activity|WorkflowTask)\"}[$__rate_interval])) by (operation)",
+              "expr": "sum(rate(task_terminal_failures{operation=~\"Timer(Active|Standby)TaskActivity(RetryTimer|Timeout)|Transfer(Active|Standby)Task(Activity|WorkflowTask)\"}[$__rate_interval])) by (operation)",
               "legendFormat": "{{operation}}",
               "refId": "A"
             }
@@ -8065,7 +8065,7 @@
           },
           "id": 2203,
           "title": "Dead-Lettered Tasks \u2014 Informational (visibility / retention / WFT-timeout)",
-          "description": "DLQ writes that do NOT strand a running execution: visibility (search/list store), retention cleanup (DeleteHistoryEvent), and workflow-task timeout enforcement (covered by alerts 56/76). A trend of visibility/retention pipeline health \u2014 not page-worthy.",
+          "description": "DLQ writes that do NOT strand a running execution: visibility (search/list store), retention cleanup (DeleteHistoryEvent), and workflow-task timeout enforcement (covered by alerts 56/76). A trend of visibility/retention pipeline health \u2014 not page-worthy. Reads task_terminal_failures, not dlq_writes: dlq_writes only carries the operation label from server v1.32.0, so an operation-filtered query on it returns nothing on older servers. task_terminal_failures carries operation on every version. It counts a task being marked terminally failed, which is the same moment. Turning history.TaskDLQEnabled off does not leave this panel accurate: the two failure paths then diverge and neither reaches it. A task failing with a corrupt or otherwise non-retryable error is dropped and marked complete - task_errors_corruption counts it, this panel does not. A task failing with unexpected but retryable errors, the 70-attempt path this panel is mostly about, is never dead-lettered at all and retries with no limit - neither metric counts it. So with the DLQ off, zero here does not mean nothing is being abandoned.",
           "type": "timeseries",
           "options": {
             "legend": {
@@ -8081,7 +8081,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(dlq_writes{operation=~\"VisibilityTask.*|Timer(Active|Standby)TaskDeleteHistoryEvent|Timer(Active|Standby)TaskWorkflowTaskTimeout\"}[$__rate_interval])) by (operation)",
+              "expr": "sum(rate(task_terminal_failures{operation=~\"VisibilityTask.*|Timer(Active|Standby)TaskDeleteHistoryEvent|Timer(Active|Standby)TaskWorkflowTaskTimeout\"}[$__rate_interval])) by (operation)",
               "legendFormat": "{{operation}}",
               "refId": "A"
             }
@@ -8198,6 +8198,134 @@
               "refId": "A"
             }
           ]
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "How many messages are sitting in each history task dead-letter queue right now, from dlq_message_count. Every other panel in this group is a RATE, and a rate reads zero once dead-lettering stops - so a queue that filled months ago and has been quiet since is invisible on all of them. This is the only panel that shows an existing backlog. Above zero means messages are sitting there waiting for an operator, not that something just happened; the work they represent has not been done and will not be retried until someone merges them. Break the number down with tdbg dlq list, then tdbg dlq read, before deciding between merge and purge. Two reading caveats: the gauge is refreshed only every 3 HOURS, so it is a staircase and a flat hour means nothing; and it is emitted only by the history host that owns shard 1, so the series gaps whenever that host restarts or the shard moves.",
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "lineWidth": 2,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green"
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 37
+          },
+          "id": 2206,
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "min",
+                "max",
+                "mean",
+                "lastNotNull"
+              ]
+            }
+          },
+          "targets": [
+            {
+              "expr": "max(dlq_message_count) by (task_category)",
+              "legendFormat": "{{task_category}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Dead-Letter Queue Depth by Category",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "Deepest attempt count reached by the execution-stranding task types - activity retry and timeout timers, and activity / workflow-task dispatch - read as the top bucket of the task_attempt histogram. The companion to Visibility Task Retry Depth, which shows the same thing for visibility tasks. A task records its attempt count on completion, and a task still retrying past 30 attempts also reports in flight, so a healthy cluster sits near 1 and is not expected to be empty - the signal is the line climbing. At history.TaskDLQUnexpectedErrorAttempts (70 by default, roughly 75 minutes with the retry backoff) the task is dead-lettered and its execution freezes. Read it together with Dead-Lettered Tasks - Execution-Stranding: a line that climbs toward the threshold and then RESETS without any dead-lettering means tasks are being discarded and reloaded before they can reach it, so they retry forever instead of being parked - the queue's position then stops advancing and its task table grows without bound. Thresholds mark 30 and 70, but the histogram buckets step 1/2/5/10/20/50/100, so readings are coarse and a threshold triggers on the bucket above. Cluster-wide - ignores the namespace variable.",
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "custom": {
+                "lineWidth": 2,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green"
+                  },
+                  {
+                    "color": "orange",
+                    "value": 30
+                  },
+                  {
+                    "color": "red",
+                    "value": 70
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 37
+          },
+          "id": 2207,
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "min",
+                "max",
+                "mean",
+                "lastNotNull"
+              ]
+            }
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(1.00, sum by (operation, le) (rate(task_attempt_bucket{operation=~\"Timer(Active|Standby)TaskActivity(RetryTimer|Timeout)|Transfer(Active|Standby)Task(Activity|WorkflowTask)\",service_name=\"history\"}[$__rate_interval])))",
+              "legendFormat": "{{operation}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Task Retry Depth \u2014 Stranding Types (approaching DLQ)",
+          "type": "timeseries"
         }
       ]
     },
@@ -8378,7 +8506,7 @@
           },
           "id": 2213,
           "title": "Signal 2 \u2014 History Task DLQ Writes & Write Failures",
-          "description": "Downstream escalation of an archival outage. 'archival DLQ writes' = archival tasks reaching the DLQ after 70 failed attempts (dlq_writes, ArchivalTaskArchiveExecution). 'DLQ write failures' = writes to the single-partition DLQ themselves failing (task_dlq_failures) \u2014 database distress. Alert 82 pages on task_dlq_failures.",
+          "description": "Downstream escalation of an archival outage. 'archival DLQ writes' = archival tasks reaching the DLQ after 70 failed attempts (task_terminal_failures, ArchivalTaskArchiveExecution - not dlq_writes, which only carries the operation label from server v1.32.0). 'DLQ write failures' = writes to the single-partition DLQ themselves failing (task_dlq_failures) \u2014 database distress. Alert 82 pages on task_dlq_failures.",
           "type": "timeseries",
           "options": {
             "legend": {
@@ -8394,7 +8522,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(dlq_writes{operation=\"ArchivalTaskArchiveExecution\"}[$__rate_interval]))",
+              "expr": "sum(rate(task_terminal_failures{operation=\"ArchivalTaskArchiveExecution\"}[$__rate_interval]))",
               "legendFormat": "archival DLQ writes/s",
               "refId": "A"
             },
@@ -8711,7 +8839,7 @@
   },
   "timepicker": {},
   "timezone": "utc",
-  "title": "Temporal Server Dashboard v2.18.0",
+  "title": "Temporal Server Dashboard v2.20.0",
   "uid": "temporal-overview-v1",
   "version": 11,
   "weekStart": ""

@@ -6,7 +6,7 @@
 
 ### What this alert detects
 
-`dlq_writes` has a non-zero rate for an execution-stranding `operation` type, sustained for 10 minutes. The stranding set is:
+`task_terminal_failures` has a non-zero rate for an execution-stranding `operation` type, sustained for 10 minutes. The stranding set is:
 
 - `TimerActiveTaskActivityRetryTimer` / `TimerStandbyTaskActivityRetryTimer` — the retry timer that re-dispatches a retrying activity to matching
 - `TimerActiveTaskActivityTimeout` / `TimerStandbyTaskActivityTimeout` — the activity timeout timer
@@ -50,7 +50,7 @@ The usual trigger is a prolonged database outage or overload: persistence operat
 **3. If a durable DB fix isn't immediate, buy time with dynamic config.** Two levers to stop transient outages from becoming permanent stranding:
 
 - Raise `history.TaskDLQUnexpectedErrorAttempts` (default 70 ≈ 1h) to give the DB more time before a task dead-letters — e.g. 200 for ~3h.
-- Or set `history.TaskDLQEnabled: false` to stop writing to the DLQ entirely — tasks then retry indefinitely and self-recover once the DB returns. Tradeoff: with the DLQ off, a genuinely poison/corrupt task retries forever instead of being quarantined.
+- Or set `history.TaskDLQEnabled: false` to stop writing to the DLQ entirely. Tasks failing with unexpected but retryable errors — which is what a database outage produces — then retry with no limit and self-recover once the DB returns. Two tradeoffs. A genuinely corrupt task takes the other path: it is dropped and marked complete rather than quarantined, counted only by `task_errors_corruption`, and it cannot be recovered afterwards. And while the DLQ is off this alert and the Dead-Lettered Tasks panels read zero however much work is being abandoned, because neither path records `task_terminal_failures`.
 
 ### Tuning this alert
 

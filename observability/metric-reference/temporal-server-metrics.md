@@ -165,7 +165,7 @@ This document lists all OSS Temporal server metrics defined in `metrics_defs.go`
 | `sharditem_removed_count` | Counter | Shard context removal events. |
 | `sharditem_acquisition_latency` | Timer | Shard acquisition latency. |
 | `shardinfo_immediate_queue_lag` | Histogram | Lag between pending immediate task ID and last generated task ID, per shard. |
-| `shardinfo_scheduled_queue_lag` | Timer | Lag between earliest scheduled pending task time and now, per shard. |
+| `shardinfo_scheduled_queue_lag` | Timer | Gap between the scheduled queue's read position and its ack level, per shard and `task_category` — the read position's fire time minus the fire time of the oldest pending task. Not the lateness of an individual task, and not measured against now: the reader reads ahead of now, so this has a floor of several hundred seconds even on an idle cluster. Emitted once per shard every ~5 min, so rate windows must be `[11m]` or wider. Saturates at the 1000s top bucket. |
 | `syncshard_remote_count` | Counter | Remote shard sync count. |
 | `syncshard_remote_failed` | Counter | Failed remote shard syncs. |
 | `finalizer_runs` | Counter | Number of finalizer runs. |
@@ -266,7 +266,7 @@ This document lists all OSS Temporal server metrics defined in `metrics_defs.go`
 | `shard_linger_success` | Timer | Successful shard linger durations. |
 | `shard_linger_timeouts` | Counter | Shard linger timeouts. |
 | `dynamic_rate_limit_multiplier` | Gauge | Current dynamic rate limiter multiplier. |
-| `dlq_writes` | Counter | Messages enqueued to the DLQ. |
+| `dlq_writes` | Counter | Messages enqueued to the DLQ. Carries `operation` / `task_type` only from server **v1.32.0**; below that only `task_category` (plus `namespace_state` from v1.29). Use `task_terminal_failures` for an operation-filtered query that works on every version. |
 | `dlq_message_count` | Gauge | Current number of messages in DLQ. |
 | `data_loss_errors` | Counter | Data loss errors (high cardinality; tagged with namespace, workflowID, runID). |
 | `rate_limited_task_runnable_wait_time` | Timer | Wait time for rate-limited tasks to become runnable. |
@@ -321,7 +321,7 @@ This document lists all OSS Temporal server metrics defined in `metrics_defs.go`
 | `task_errors_namespace_handover` | Counter | Task errors during namespace handover. |
 | `task_errors_internal` | Counter | Internal task errors. |
 | `task_errors_throttled` | Counter | Task errors caused by resource exhaustion (excluding workflow busy). |
-| `task_errors_corruption` | Counter | Task corruption errors. |
+| `task_errors_corruption` | Counter | A history task failed with an error the server treats as non-retryable, usually data corruption. Recorded on every such failure, whether or not the task is then dead-lettered — so it is the only counter that still moves when `history.TaskDLQEnabled` is off, where the task is dropped and marked complete instead. Carries `namespace`, `operation` and `task_type`. Not on any dashboard panel yet. |
 | `chasm_pure_task_requests` | Counter | CHASM pure tasks executed. |
 | `chasm_pure_task_errors` | Counter | Errors during CHASM pure task execution. |
 | `task_schedule_to_start_latency` | Timer | Task schedule-to-start latency. |

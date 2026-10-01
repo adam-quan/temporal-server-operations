@@ -747,8 +747,18 @@ sum(rate(persistence_error_with_type{service_name="history",operation="UpdateSha
 
 **Condition:**
 ```promql
-sum(rate(dlq_writes{operation=~"Timer(Active|Standby)TaskActivity(RetryTimer|Timeout)|Transfer(Active|Standby)Task(Activity|WorkflowTask)"}[5m])) > 0
+sum(rate(task_terminal_failures{operation=~"Timer(Active|Standby)TaskActivity(RetryTimer|Timeout)|Transfer(Active|Standby)Task(Activity|WorkflowTask)"}[5m])) > 0
 ```
+
+> **Why `task_terminal_failures` and not `dlq_writes`.** `dlq_writes` only carries the
+> `operation` label from server **v1.32.0**; on older servers an operation-filtered query on it
+> returns nothing, so this alert would never fire. `task_terminal_failures` carries `operation`
+> on every version. It records the moment a task is marked terminally failed — the same moment.
+> With `history.TaskDLQEnabled` off this alert goes blind rather than quiet: a corrupt or
+> otherwise non-retryable task is dropped and marked complete, counted by
+> `task_errors_corruption` instead, and a task failing with unexpected but retryable errors is
+> never dead-lettered at all — it retries with no limit. Neither path records
+> `task_terminal_failures`, so silence here does not mean nothing is being abandoned.
 
 Execution-stranding history tasks (activity retry/timeout timers, activity/workflow-task dispatch; Active + Standby) are being written to the history task DLQ. A DLQ'd task is removed from the active queue and **not** auto-retried — for a retrying activity this strands it until an operator redrives the DLQ or pause/unpauses it. The usual trigger is a prolonged database outage/overload that drives persistence operations to time out (`context deadline exceeded` / `context canceled`), which count toward `history.TaskDLQUnexpectedErrorAttempts` (default 70 ≈ 1h). DB-agnostic — fires the same on Cassandra and SQL. Visibility, retention (`DeleteHistoryEvent`), and workflow-task-timeout DLQ writes are deliberately excluded (WFT timeouts covered by alerts 56/76), as are rate-limit rejections (`ResourceExhausted`, which are excused and never dead-lettered). Intentionally strict (`> 0` sustained 10m); tunable — see the runbook. Cluster-wide (no namespace filter), consistent with the Essential Set.
 
@@ -759,7 +769,7 @@ Execution-stranding history tasks (activity retry/timeout timers, activity/workf
 ## Section 8a — Archival Health
 
 > **Dashboard panels:** Archival Health row — Signal 1 Archival Attempt Error Rate (panel 2211), Archival Attempts by Status (panel 2212), Signal 2 History Task DLQ Writes & Write Failures (panel 2213)
-> **Metrics:** `archiver_archive_latency` (`status` = ok / err / rate_limit_exceeded), `dlq_writes` (`operation="ArchivalTaskArchiveExecution"`), `task_dlq_failures`
+> **Metrics:** `archiver_archive_latency` (`status` = ok / err / rate_limit_exceeded), `task_terminal_failures` (`operation="ArchivalTaskArchiveExecution"`), `task_dlq_failures`
 > **Component:** history
 >
 > Detection surface for a **sustained archival-backend (S3 / GCS / custom) outage**. A dead backend fails every closed workflow's archival task; after `history.TaskDLQUnexpectedErrorAttempts` (default 70 ≈ 1h) each is dead-lettered, and a large burst of DLQ writes can back-pressure the whole database. Full mechanism and recovery in the [Archival Backend Outage playbook](../../../playbooks/detecting-recovering-archival-outage.md).
@@ -1032,9 +1042,9 @@ The deadlock detector timeout for this ping is **40 seconds** (10s DB operation 
 | Severity | warning |
 | Panel | Timer Task Scheduling Latency (325) |
 
-**Condition:** `histogram_quantile(0.99, ...(shardinfo_scheduled_queue_lag_bucket{task_category="timer"}...)) > 5`
+**Condition:** `histogram_quantile(0.99, sum by (task_category, le) (rate(shardinfo_scheduled_queue_lag_bucket{task_category="timer",service_name="history"}[11m]))) > 700`
 
-Timers firing more than 5s late.
+Early warning below alert 38's page threshold. Note this metric has a structural floor of several hundred seconds even on an idle cluster and saturates at 1000s, so the usable band is narrow — set the threshold from your own quiet-cluster reading, not from this number.
 
 ---
 
@@ -1046,14 +1056,16 @@ Timers firing more than 5s late.
 | UID | `temporal-alert-038` |
 | Severity | critical |
 | Panel | 325 |
-| `for` | 5m |
+| `for` | 15m |
 | `noDataState` | NoData |
 
-**Condition:** `histogram_quantile(0.99, sum by (operation, le) (rate(shardinfo_scheduled_queue_lag_bucket{task_category="timer",service_name="history"}[5m]))) > 30`
+**Condition:** `histogram_quantile(0.99, sum by (task_category, le) (rate(shardinfo_scheduled_queue_lag_bucket{task_category="timer",service_name="history"}[11m]))) > 900`
 
-**Threshold:** p99 lag > 30s
+**Threshold:** p99 gap > 900s (15 min)
 
-Timer task scheduling lag has exceeded 30 seconds. Workflow timers, scheduled activities, and workflow timeouts are firing late — deadlines, heartbeat timeouts, and schedule-to-start timeouts are affected. Note: sparse data on idle clusters can produce non-zero p99 artifacts — confirm there is actual timer activity before investigating.
+The timer queue's ack level is more than 15 minutes behind its read position. The ack level is held by the oldest timer task that has not completed, so a single stuck task raises this on its own — it does not by itself mean a large backlog. What it does mean is that no timer rows at or above that position are being deleted, for every namespace on the affected shards.
+
+Two properties shape the threshold. The metric has a structural floor — the reader always reads ahead of now, so an idle cluster still reports several hundred seconds — and it saturates at 1000s, the top histogram bucket. 900s sits between the two. Take a quiet-cluster reading and adjust if yours differs.
 
 **Runbook:** [38-timer-scheduling-lag-critical.md](./runbooks/38-timer-scheduling-lag-critical.md)
 
@@ -1945,14 +1957,24 @@ p99 write latency to a visibility store has exceeded 3s. May indicate recovery f
 | Severity | Critical |
 | Component | history |
 | Status | ✅ Essential Set |
-| Metric | `dlq_writes` |
+| Metric | `task_terminal_failures` |
 | Dashboard | [Visibility Tasks Dead-Lettered by Task Type](../../dashboards/server/temporal-server-readme.md) (panel 2128) |
 | Runbook | [83-visibility-tasks-dead-lettered.md](./runbooks/83-visibility-tasks-dead-lettered.md) |
 | Playbook | [Dual Visibility](../../../playbooks/dual-visibility.md) |
 
 ```promql
-sum(rate(dlq_writes{operation=~"VisibilityTask.*"}[5m])) by (operation)
+sum(rate(task_terminal_failures{operation=~"VisibilityTask.*"}[5m])) by (operation)
 ```
+
+> **Why `task_terminal_failures` and not `dlq_writes`.** `dlq_writes` only carries the
+> `operation` label from server **v1.32.0**; on older servers an operation-filtered query on it
+> returns nothing, so this alert would never fire. `task_terminal_failures` carries `operation`
+> on every version. It records the moment a task is marked terminally failed — the same moment.
+> With `history.TaskDLQEnabled` off this alert goes blind rather than quiet: a corrupt or
+> otherwise non-retryable task is dropped and marked complete, counted by
+> `task_errors_corruption` instead, and a task failing with unexpected but retryable errors is
+> never dead-lettered at all — it retries with no limit. Neither path records
+> `task_terminal_failures`, so silence here does not mean nothing is being abandoned.
 Fires above **0 sustained for 5m**, per operation.
 
 A visibility task has exhausted its retries and been written to the DLQ. That is data loss in the

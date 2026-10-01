@@ -93,7 +93,7 @@ All expressions are derived from the corresponding dashboard panel queries with 
 | 34b | 15m | `histogram_quantile(0.99, sum by (instance, task_category, le) (rate(shardinfo_immediate_queue_lag_bucket{service_name="history"}[11m]))) > 3000000` |
 | 34f | 1m | `sum by (instance) (dd_current_suspected_deadlocks{service_name="history"}) > 0` |
 | 34j | 5m | `histogram_quantile(0.99, sum(rate(dd_shard_io_semaphore_latency_bucket{service_name="history"}[5m])) by (instance, le)) > 20` |
-| 38 | 5m | `histogram_quantile(0.99, sum by (operation, le) (rate(shardinfo_scheduled_queue_lag_bucket{task_category="timer",service_name="history"}[5m]))) > 30` |
+| 38 | 15m | `histogram_quantile(0.99, sum by (task_category, le) (rate(shardinfo_scheduled_queue_lag_bucket{task_category="timer",service_name="history"}[11m]))) > 900` |
 | 57 | 1m | `sum by (namespace) (service_pending_requests{service_name="frontend",namespace!="_unknown_",operation=~"PollWorkflowTaskQueue\|PollActivityTaskQueue"}) == 0` |
 | 74 | — | removed from Essential Set — classic-matcher only; `sync_throttle_count` is not emitted on the default priority matcher (v1.31.0+), so it cannot fire on a modern default cluster |
 
@@ -118,7 +118,7 @@ Operators who want focused coverage without implementing the full alert inventor
 | 34b | Immediate Queue Lag Critical | 9 — Shard Queue Health | Immediate Queue Lag per Pod | 2109 | p99 immediate queue lag > 3M tasks on any `instance + task_category` — one pod's lag diverging monotonically from the fleet is the definitive stuck shard signal |
 | 34f | Shard Deadlock Detected | 9 — Shard Queue Health | Suspected Deadlocks per Pod | 2113 | Binary and unambiguous — any `dd_current_suspected_deadlocks > 0` requires immediate pod restart. `noDataState: OK` because the metric is event-driven and does not emit baseline zero. |
 | 34j | Shard IO Semaphore Deadlock Approaching | 9 — Shard Queue Health | Shard IO Semaphore Latency (Shard IO Concurrency dashboard `temporal-shard-io-v1`) | — | `dd_shard_io_semaphore_latency` p99 > 20s — the deadlock detector's health ping is starved by live traffic; fires at half the 40s detector timeout, before alert 34f forces a mandatory pod restart. SQL and Cassandra both applicable. |
-| 38 | Timer Task Scheduling Lag Critical | 10 — History Timer Task Info | Timer Task Scheduling Latency | 325 | Timers firing 30s+ late means workflow timeouts and scheduled actions are functionally broken |
+| 38 | Timer Task Scheduling Lag Critical | 10 — History Timer Task Info | Timer Task Scheduling Latency | 325 | A timer queue ack level stuck 15+ min behind the read position stops timer row deletion for every namespace on those shards |
 | 57 | All Pollers Disconnected | 15 — Pollers | Total Concurrent Pollers | 162 | All workers gone for a namespace — complete task processing halt |
 | 59a | Visibility Store Write Errors (Warning) | 16 — Visibility | Visibility Write Error Rate per Store | 2118 | `visibility_persistence_errors` > 0.1/s for a store (primary or secondary) — visibility writes failing; workflows becoming unsearchable. |
 | 59b | Visibility Store Write Errors (Critical) | 16 — Visibility | Visibility Write Error Rate per Store | 2118 | As 59a at critical rate (> 1/s sustained) — a visibility store is failing writes hard. |
@@ -246,7 +246,7 @@ Operators who want focused coverage without implementing the full alert inventor
 | 34 | Unexpected Shard Movement | 🔴 Critical | Shards Created/Removed/Closed + Service Restarts | Shard churn rate is elevated AND service restarts == 0 in the same window — shard movement without a restart indicates DB pressure, history host crash, or membership instability |
 | 78 | Shard Fleet Deficit | 🔴 Critical | Owned Shards (Total) | `sum(numshards_gauge) < <total_shards>` sustained 15m — a genuinely unowned shard, distinct from alert 34's churn-rate signal. A permanently stuck shard (e.g. Cassandra `range_id` divergence) often stops generating churn once it settles into a repeating identical CAS failure, so 34 can go quiet while the shard is still unowned; this catches the coverage gap directly. |
 | 79 | Shard Ownership Loss Persisting | 🔴 Critical | Persistence Errors Total by Operation | `sum(rate(persistence_error_with_type{operation="UpdateShard",error_type="persistence.ShardOwnershipLostError"}[5m])) > 0` sustained 10m. `ShardOwnershipLostError` is deliberately excluded from the generic `persistence_errors` counter (routine on every normal ownership handoff), so this alert queries the typed error metric directly rather than relying on the generic error-rate signal. Typically co-fires with 78. |
-| 80 | History Task DLQ Stranding | 🔴 Critical | Dead-Lettered Tasks — Execution-Stranding | `sum(rate(dlq_writes{operation=~"Timer(Active|Standby)TaskActivity(RetryTimer|Timeout)\|Transfer(Active|Standby)Task(Activity|WorkflowTask)"}[5m])) > 0` sustained 10m. Execution-stranding history tasks (activity retry/timeout timers, activity/workflow-task dispatch) being dead-lettered under a prolonged DB outage/overload (persistence timeouts → 70-attempt DLQ threshold). Filtered to the stranding `operation` subset; visibility/retention/WFT-timeout writes and `ResourceExhausted` rate-limit rejections are excluded. DB-agnostic. |
+| 80 | History Task DLQ Stranding | 🔴 Critical | Dead-Lettered Tasks — Execution-Stranding | `sum(rate(task_terminal_failures{operation=~"Timer(Active|Standby)TaskActivity(RetryTimer|Timeout)\|Transfer(Active|Standby)Task(Activity|WorkflowTask)"}[5m])) > 0` sustained 10m. Execution-stranding history tasks (activity retry/timeout timers, activity/workflow-task dispatch) being dead-lettered under a prolonged DB outage/overload (persistence timeouts → 70-attempt DLQ threshold). Filtered to the stranding `operation` subset; visibility/retention/WFT-timeout writes and `ResourceExhausted` rate-limit rejections are excluded. DB-agnostic. |
 
 > **Note:** Shard movement during a planned restart or scaling event is expected and not alertable. This alert uses a compound condition to filter out the expected case. Alerts 78/79 added after a production incident where a shard's `range_id` column and its blob-embedded `RangeId` diverged by 1, leaving the shard permanently unacquirable with no self-healing path and no existing alert coverage.
 
@@ -277,8 +277,8 @@ Operators who want focused coverage without implementing the full alert inventor
 |---|---|---|---|---|
 | 35 | Timer Task Processing Latency High | ⚠️ Warning | Timer Task Processing Latency | p99 timer processing latency exceeds 300ms |
 | 36 | Timer Task Processing Latency Critical | 🔴 Critical | Timer Task Processing Latency | p99 timer processing latency exceeds 2s |
-| 37 | Timer Task Scheduling Lag High | ⚠️ Warning | Timer Task Scheduling Latency | Timers firing more than 5s late |
-| 38 | Timer Task Scheduling Lag Critical | 🔴 Critical | Timer Task Scheduling Latency | Timers firing more than 30s late |
+| 37 | Timer Task Scheduling Lag High | ⚠️ Warning | Timer Task Scheduling Latency | Early warning band below alert 38; set from a quiet-cluster reading |
+| 38 | Timer Task Scheduling Lag Critical | 🔴 Critical | Timer Task Scheduling Latency | Timer queue ack level 15+ min behind its read position |
 | 39 | Timer Task Errors Elevated | ⚠️ Warning | Total Timer Tasks Errors | Sustained timer task error rate |
 
 ---

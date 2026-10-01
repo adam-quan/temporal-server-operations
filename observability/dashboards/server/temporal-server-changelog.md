@@ -1,5 +1,115 @@
 # Changelog — Temporal Server Dashboard
 
+## v2.20.0 — 2026-09-30
+
+One panel that could not return data, and the essential-set alert built on it that therefore
+could never fire. Found while working a cluster whose timer queue had been stuck for 82 days
+with nothing alerting on it.
+
+`shardinfo_scheduled_queue_lag` is emitted once per shard every ~5 minutes
+(`queueMetricUpdateInterval`, with 15% jitter, so up to ~5.75 min between points). A rate window
+has to span at least two consecutive points or `histogram_quantile` returns NaN and the panel
+reads "No data". **Timer Task Scheduling Latency (325)** used `$__rate_interval`, which on any
+normal dashboard range is a minute or two — far too short. The two per-pod lag panels, 2109 and
+2110, were already fixed to a hardcoded `[11m]`; this panel was missed.
+
+It also grouped by `operation`. That label does not exist on this metric: it is recorded with a
+single `task_category` tag and nothing else. Grouping by a label that is not present collapses
+everything into one unlabelled series, and the legend `{{operation}}` rendered empty.
+
+### Fixed
+
+- **Timer Task Scheduling Latency (325)** — rate window `$__rate_interval` → `[11m]`; grouping
+  `by (operation, le)` → `by (task_category, le)`; legend `{{operation}}` → `{{task_category}}`.
+  Now matches 2109 and 2110, of which it is the cluster-wide counterpart.
+- **Alert 38 — Timer Task Scheduling Lag Critical** — the same two bugs. Its `> 0` guard dropped
+  the NaN, so instead of erroring it simply never fired. This is an Essential Set alert and it
+  has never been capable of firing on any cluster.
+- **Alert 38 threshold** — 30s → **900s**, and `for` 5m → 15m. The query bug was masking a second
+  defect: 30s is below the metric's floor. The value is the distance between the queue's read
+  position and its ack level, and the timer reader always reads ahead of now, so an idle cluster
+  with zero workflows still reports several hundred seconds — one was measured at 495s. A 30s
+  threshold would have fired permanently the moment the query started returning data. The upper
+  bound is fixed too: the metric is a Seconds timer, whose top bucket is 1000s, so p99 cannot
+  exceed that. 900s is the usable page point between the two. `for: 15m` requires more than one
+  emission cycle rather than letting a single sample satisfy it.
+- **Alert 37 (planned) — Timer Task Scheduling Lag High** — same correction applied to its
+  recorded condition in the alerts index, 5s → 700s.
+- **Runbook 38** — rewritten. It described the metric as how late individual timers fire, which
+  is not what it measures, and cited `history.timerProcessorCompleteTimerInterval`, which does
+  not exist in server source. It now covers what the ack level is, why a pinned ack level stops
+  row deletion for every namespace on the shard, the floor and the 1000s ceiling, and how to find
+  the namespace holding the position with `tdbg shard describe`.
+
+### Changed
+
+- **Timer Task Scheduling Latency** readme entry — rewrote it. It said high values mean "timers
+  are firing later than expected", which is the misreading the panel description already warns
+  against. It now states what the measurement is, that one stuck task raises it on its own, that
+  the real consequence is timer rows never being deleted, and both reading traps.
+
+---
+
+## v2.19.0 — 2026-09-26
+
+Four dead-letter panels that returned nothing on any server below **v1.32.0**, and the two
+essential alerts built on two of them.
+
+`dlq_writes` is recorded on the DLQ writer's own metrics handler, which is a service-level
+singleton created once at startup. `operation` is a per-task value, so it cannot come from that
+handler — it has to be passed explicitly in the record call, and that only happens from server
+**v1.32.0**. Every panel filtering `dlq_writes{operation=...}` therefore matched nothing on older
+servers, and an empty panel reads as "nothing dead-lettered" rather than "wrong label".
+
+`task_terminal_failures` records the same moment — a task being marked terminally failed — on a
+handler that *is* rebuilt per task from the execution's own metric tags, so it carries `operation`
+on every version. The filters are unchanged; only the metric name moved.
+
+One caveat, and it is not in the reassuring direction. With `history.TaskDLQEnabled` off, neither
+failure path reaches these panels. A task failing with a corrupt or otherwise non-retryable error
+is dropped and marked complete — `task_errors_corruption` counts it, these panels do not. A task
+failing with unexpected but retryable errors — the 70-attempt `TaskDLQUnexpectedErrorAttempts`
+path that the whole stranding story is about — is never dead-lettered at all: it retries with no
+limit. So with the DLQ off a flat zero on these panels does not mean nothing is being abandoned,
+and alerts 80 and 83 go blind rather than quiet.
+
+### Fixed
+
+- **Visibility Tasks Dead-Lettered by Task Type (2128)** — now reads `task_terminal_failures`.
+  Backs alert 83.
+- **Dead-Lettered Tasks — Execution-Stranding (page-worthy) (2202)** — now reads
+  `task_terminal_failures`. Backs alert 80, the page for stranded executions. This is the one that
+  mattered most: a cluster was found with thousands of executions frozen for up to two years and
+  nothing had ever alerted.
+- **Dead-Lettered Tasks — Informational (2203)** — now reads `task_terminal_failures`.
+- **Signal 2 — History Task DLQ Writes & Write Failures (2213)** — the `dlq_writes` series now
+  reads `task_terminal_failures`. The `task_dlq_failures` series is unchanged and was never
+  affected, so **alert 82 was never broken**.
+- **Readme** — the claim that "`dlq_writes` carries an `operation` tag" is corrected; it does so
+  only from v1.32.0.
+
+### Added
+
+- **Dead-Letter Queue Depth by Category (2206).** `dlq_message_count` by `task_category` — the
+  number of messages **sitting** in each dead-letter queue. Every other panel in this group is a
+  rate, and a rate reads zero once dead-lettering stops: one cluster had 1.4 million messages
+  parked in a queue that had been quiet for twelve months, and every panel here was flat zero the
+  whole time. A rate cannot show a backlog that already exists. Note the gauge refreshes every
+  three hours and only from the host owning shard 1.
+- **Task Retry Depth — Stranding Types (approaching DLQ) (2207).** The `task_attempt` companion to
+  the visibility panel of the same name, for the execution-stranding operation types. Its real use
+  is beside **Dead-Lettered Tasks — Execution-Stranding**: a line that climbs toward the threshold
+  and then resets *without* any dead-lettering means tasks are being discarded and reloaded before
+  they can reach it — so they retry forever rather than being parked, the queue's position stops
+  advancing, and its task table grows without bound.
+
+### Changed
+
+- All four panel descriptions now state which metric they read and why, including what they do
+  and do not show when `TaskDLQEnabled` is false.
+
+---
+
 ## v2.18.0 — 2026-09-24
 
 Attributing `ResourceExhausted` to the service that raised it. Prompted by a cluster where, after

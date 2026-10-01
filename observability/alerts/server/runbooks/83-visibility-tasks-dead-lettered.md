@@ -7,7 +7,7 @@
 
 ### What this alert detects
 
-`dlq_writes` has a non-zero rate for a `VisibilityTask.*` operation, sustained for 5 minutes. Visibility tasks have stopped being retried and are being written to the history task dead letter queue.
+`task_terminal_failures` has a non-zero rate for a `VisibilityTask.*` operation, sustained for 5 minutes. Visibility tasks have stopped being retried and are being written to the history task dead letter queue.
 
 A visibility task reaches the DLQ after failing `history.TaskDLQUnexpectedErrorAttempts` times with unexpected errors — default **70**, which with retry jitter is roughly **70 minutes**. Failing to reach a store, an Elasticsearch write that is never acknowledged, and an Elasticsearch rejection all count as unexpected.
 
@@ -34,7 +34,7 @@ This has been confirmed on a live cluster and is important enough to check befor
 
 The Elasticsearch bulk processor holds documents in memory. The store stops waiting at `worker.ESProcessorAckTimeout` (default 30s) and fails the task — possibly all the way into the DLQ — while the document is **still buffered**. When Elasticsearch recovers, the processor flushes and the document lands after all.
 
-Observed directly: twelve tasks dead-lettered during an induced outage (`dlq_writes` = 12, `tdbg dlq list` showed 12 messages), and after recovery **all twelve records were present in both indices**.
+Observed directly: twelve tasks dead-lettered during an induced outage (`dlq_writes` = 12 on that cluster, `tdbg dlq list` showed 12 messages), and after recovery **all twelve records were present in both indices**.
 
 There is a limit to this rescue. The buffer holds roughly `worker.ESProcessorNumOfWorkers` × `worker.ESProcessorBulkActions` documents — about 1,000 at defaults — plus whatever is in flight, so it cannot absorb an unbounded backlog.
 
@@ -99,7 +99,7 @@ To buy more time before records are dropped, raise `history.TaskDLQUnexpectedErr
 
 | Key | Default | Effect |
 |---|---|---|
-| `history.TaskDLQEnabled` | `true` | Master switch. If disabled, failing tasks are **dropped** instead of dead-lettered — worse, not better |
+| `history.TaskDLQEnabled` | `true` | Master switch. If disabled, a visibility task failing against a down store is **not** dropped — it retries with no limit, so the record lands once the store recovers, at the cost of holding the queue position and the retry load. Only a corrupt task is dropped. Either way this alert and its panel read zero, so turning it off hides the problem rather than fixing it |
 | `history.TaskDLQUnexpectedErrorAttempts` | `70` | Attempts before a task is dead-lettered, roughly 70 minutes with jitter |
 | `history.TaskDLQInternalErrors` | `false` | When true, `serviceerror.Internal` failures dead-letter on the **first** attempt with no grace period |
 | `worker.ESProcessorAckTimeout` | `30s` | Elasticsearch only. How long the store waits for a write to be confirmed before failing the attempt |

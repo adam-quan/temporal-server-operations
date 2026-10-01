@@ -711,7 +711,7 @@ groups:
       datasourceUid: Prometheus  # DATASOURCE — change to match your Prometheus datasource name or UID
       model:
         editorMode: code
-        expr: histogram_quantile(0.99, sum by (operation, le) (rate(shardinfo_scheduled_queue_lag_bucket{task_category="timer",service_name="history"}[5m]))) > 0
+        expr: histogram_quantile(0.99, sum by (task_category, le) (rate(shardinfo_scheduled_queue_lag_bucket{task_category="timer",service_name="history"}[11m]))) > 0
         instant: true
         intervalMs: 1000
         maxDataPoints: 43200
@@ -738,7 +738,7 @@ groups:
         conditions:
         - evaluator:
             params:
-            - 30
+            - 900
             type: gt
           operator:
             type: and
@@ -751,7 +751,7 @@ groups:
           type: query
     noDataState: NoData
     execErrState: Error
-    for: 5m
+    for: 15m
     labels:
       severity: critical
       service: temporal
@@ -759,25 +759,39 @@ groups:
     annotations:
       __dashboardUid__: temporal-overview-v1
       __panelId__: '325'
-      summary: 'Temporal: timer task scheduling lag critical ({{ $values.B.Value | printf "%.1fs" }} behind)'
-      description: 'Timer task scheduling lag has exceeded 30 seconds. Workflow timers, scheduled
+      summary: 'Temporal: timer queue ack level {{ $values.B.Value | printf "%.0fs" }} behind the read position'
+      description: 'The timer queue''s ack level is more than 15 minutes behind its read
 
-        activities, and workflow timeouts are firing late — deadlines, heartbeat timeouts,
+        position, measured across shards. The ack level is held by the oldest timer task that
 
-        and schedule-to-start timeouts are affected. Check Persistence Latencies and
+        has not completed, so a single task that cannot finish holds this up on its own — it
 
-        Shard Lock Latency panels. Note: sparse data on idle clusters can produce
+        does not by itself mean a large backlog. While it is held, the timer rows at and above
 
-        non-zero p99 artifacts — confirm there is actual timer activity before investigating.
+        that position are never deleted, for every namespace on the affected shards.
+
+
+        Open Scheduled Queue Lag per Pod to see which pods are affected, then use tdbg to read
+
+        the un-acked scopes on a shard owned by one of them and find the namespace holding them.
+
+
+        Two things to know before acting. This metric has a structural floor: it is the distance
+
+        between the read position and the ack level, and the timer reader always reads ahead of
+
+        now, so an idle cluster still reports several hundred seconds. Take a quiet-cluster
+
+        reading and treat that as your zero. And it saturates at 1000s (16.7 min), the top
+
+        histogram bucket, so a line pinned at 1000 means "at least that, possibly far more" —
+
+        the number stops growing but the backlog does not.
+
 
         Runbook: https://github.com/tsurdilo/temporal-metrics/blob/main/observability/alerts/server/runbooks/38-timer-scheduling-lag-critical.md
 
         '
-    isPaused: false
-
-  # ---------------------------------------------------------------------------
-  # Alert 57 — All Pollers Disconnected
-  # ---------------------------------------------------------------------------
   - uid: temporal-alert-057
     title: 'Temporal: All Pollers Disconnected'
     condition: C
@@ -1496,7 +1510,7 @@ groups:
       datasourceUid: Prometheus  # DATASOURCE — change to match your Prometheus datasource name or UID
       model:
         editorMode: code
-        expr: sum(rate(dlq_writes{operation=~"Timer(Active|Standby)TaskActivity(RetryTimer|Timeout)|Transfer(Active|Standby)Task(Activity|WorkflowTask)"}[5m]))
+        expr: sum(rate(task_terminal_failures{operation=~"Timer(Active|Standby)TaskActivity(RetryTimer|Timeout)|Transfer(Active|Standby)Task(Activity|WorkflowTask)"}[5m]))
         instant: true
         intervalMs: 1000
         maxDataPoints: 43200
@@ -1721,7 +1735,7 @@ groups:
       datasourceUid: Prometheus  # DATASOURCE — change to match your Prometheus datasource name or UID
       model:
         editorMode: code
-        expr: sum(rate(dlq_writes{operation=~"VisibilityTask.*"}[5m])) by (operation)
+        expr: sum(rate(task_terminal_failures{operation=~"VisibilityTask.*"}[5m])) by (operation)
         instant: true
         intervalMs: 1000
         maxDataPoints: 43200

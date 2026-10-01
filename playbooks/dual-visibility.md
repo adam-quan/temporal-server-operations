@@ -852,7 +852,7 @@ back, the processor flushes and the document is indexed, even though the task th
 produced it already failed and may already have been dead-lettered.
 
 This is not theoretical. On a test cluster, twelve workflows were dead-lettered
-during an Elasticsearch outage — `dlq_writes` counted twelve and `tdbg dlq list`
+during an Elasticsearch outage — `dlq_writes` counted twelve on that cluster and `tdbg dlq list`
 showed twelve messages — and after recovery **all twelve records were present in
 both stores**.
 
@@ -2325,7 +2325,8 @@ and scope, and the panels, alerts and runbooks that go with all of it.
 | `task_attempt` | **histogram** | Visibility Task Retry Depth | Recorded by **every** task when it completes, plus in flight once a task passes 30 attempts — so it is populated on a healthy cluster, sitting at about 1. Query `task_attempt_bucket`; there is no bare `task_attempt` series. Buckets are coarse — in the range that matters for the dead letter queue they step 1, 2, 5, 10, 20, 50, 100, so a task at 35 attempts reads as 50. Labels: `operation`, `namespace`, `task_type`, `archetype`. |
 | `task_errors` | counter | Visibility Task Failures & Internal Errors | Unexpected task processing errors. The emitted name is `task_errors`; the Go constant is `TaskFailures`, which is easy to mistake for the metric name. |
 | `task_errors_internal` | counter | Visibility Task Failures & Internal Errors | Internal-type errors. Rising on visibility operations with Write Request Rate at zero means a bad write-mode value. |
-| `dlq_writes` | counter | Visibility Tasks Dead-Lettered | Above zero means visibility tasks were dropped. Which records stay missing depends on the task type. Labels: `operation`, `task_category`, `task_type`, `namespace`, `namespace_state`, `archetype`. |
+| `task_terminal_failures` | counter | Visibility Tasks Dead-Lettered | Above zero means visibility tasks stopped being retried. Which records stay missing depends on the task type. Labels include `operation` and `task_type` on every server version. |
+| `dlq_writes` | counter | — | The same event, but it only carries `operation`, `task_type` and `archetype` from server **v1.32.0**; below that it carries only `task_category` (plus `namespace_state` from v1.29). An operation-filtered query on it returns nothing on older servers, which is why the panel and alert 83 read `task_terminal_failures` instead. |
 | `task_latency_queue` | histogram | Visibility Task End-to-End Latencies | End-to-end visibility task latency. |
 | `elasticsearch_bulk_processor_errors` | counter | ES Bulk Processor Errors | ES only, history only. **No `visibility_index_name`** — cannot tell two ES stores apart. Adds `http_status`. |
 | `elasticsearch_bulk_processor_queued_requests` | **histogram** | ES Bulk Processor Queue Depth | ES only. Query the `_bucket` series. Rising means the processor is falling behind. |
@@ -2343,7 +2344,7 @@ nothing at all. The panels above already account for that.
 `CountWorkflowExecutions`, `GetWorkflowExecution`, and the CHASM equivalents
 `ListChasmExecutions` and `CountChasmExecutions`.
 
-Visibility task types on `task_attempt` and `dlq_writes`:
+Visibility task types on `task_attempt` and `task_terminal_failures`:
 `VisibilityTaskStartExecution`, `VisibilityTaskUpsertExecution`,
 `VisibilityTaskCloseExecution`, `VisibilityTaskDeleteExecution`.
 
@@ -2493,7 +2494,7 @@ limitation of the server metrics, not of the dashboard.
 | `temporal-alert-059a` | Visibility Store Write Errors (Warning) | `visibility_persistence_errors` > 0.1/s for 2m on either store |
 | `temporal-alert-059b` | Visibility Store Write Errors (Critical) | `visibility_persistence_errors` > 1/s for 1m on either store |
 | `temporal-alert-059c` | Visibility Store Write Latency High | p99 `visibility_persistence_latency` > 3s for 5m on either store |
-| `temporal-alert-083` | Visibility Tasks Dead-Lettered | `dlq_writes` on any `VisibilityTask.*` operation > 0 for 5m |
+| `temporal-alert-083` | Visibility Tasks Dead-Lettered | `task_terminal_failures` on any `VisibilityTask.*` operation > 0 for 5m |
 | `temporal-alert-084` | Visibility Store Not Acknowledging Writes | `visibility_persistence_error_with_type` with `error_type=persistence_TimeoutError` > 0.1/s for 5m |
 | `temporal-alert-085` | Visibility Read Errors | `visibility_persistence_errors` on read operations > 0.1/s for 2m, any service |
 
